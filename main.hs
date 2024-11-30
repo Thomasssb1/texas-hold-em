@@ -1,4 +1,5 @@
 import System.Random
+import Control.Monad.State
 import Data.List
 
 data Suit = Spades | Hearts | Diamonds | Clubs
@@ -27,29 +28,39 @@ instance Eq Player where
 
 data GameState = GameState {activePlayers :: [Player], deck :: Deck, pot :: Int, currentBets :: [(Player, Int)], dealerIndex :: Int, smallBlindIndex :: Int, bigBlindIndex :: Int} deriving Show
 
+main :: IO ()
+main = do
+    -- change runstate to execstate when you don't need the result
+    let (result, newState) = runState dealCards initialState
+    print result
+
+initialState :: GameState
+initialState = GameState createPlayers (shuffleDeck 1) 0 [] 0 1 2
+
 -- Shuffles the a deck of cards
 -- Takes an integer seed for the random number generator
 shuffleDeck :: Int -> Deck
-shuffleDeck n = let
+shuffleDeck seed = let
     cmp (_, n1) (_, n2) = compare n1 n2 
     (Deck cards) = Deck [Card suit value | suit <- [Spades, Hearts, Diamonds, Clubs], value <- [Ace, Two, Three, Four, Five, Six, Seven, Eight, Nine, Ten, Jack, Queen, King]]
-    in 
-    Deck [ card | (card, _) <- sortBy cmp (zip cards (randoms (mkStdGen n) :: [Int]))]
+    in
+    Deck [ card | (card, _) <- sortBy cmp (zip cards (randoms (mkStdGen seed) :: [Int]))]
 
 createPlayers :: [Player]
 createPlayers = let
     newPlayer i = Player ("Player " ++ show i) [] 100 False
     in [newPlayer i | i <- [1..6]]
 
-
-dealCards :: GameState -> GameState
-dealCards gs = let
-    (updatedPlayers, updatedDeck) = dealCardsToPlayers (activePlayers gs) (deck gs)
-    in GameState updatedPlayers updatedDeck (pot gs) (currentBets gs) (dealerIndex gs) (smallBlindIndex gs) (bigBlindIndex gs)
-
-dealCardsToPlayers :: [Player] -> Deck -> ([Player], Deck)
-dealCardsToPlayers [] deck = ([], deck)
-dealCardsToPlayers (p:ps) (Deck deck) = let
-    player = Player (name p) (hand p ++ take 2 deck) (chips p) (dealer p)
-    (players, Deck updatedDeck) = dealCardsToPlayers ps (Deck (drop 2 deck))
-    in (player : players, Deck updatedDeck)
+dealCards :: State GameState GameState
+dealCards = do
+    gs <- get
+    let (updatedPlayers, updatedDeck) = dealCardsToPlayers (activePlayers gs) (deck gs)
+    put gs {activePlayers = updatedPlayers, deck = updatedDeck}
+    return gs
+    where
+    dealCardsToPlayers :: [Player] -> Deck -> ([Player], Deck)
+    dealCardsToPlayers [] deck = ([], deck)
+    dealCardsToPlayers (p:ps) (Deck deck) = let
+        player = Player (name p) (hand p ++ take 2 deck) (chips p) (dealer p)
+        (players, Deck updatedDeck) = dealCardsToPlayers ps (Deck (drop 2 deck))
+        in (player : players, Deck updatedDeck)
