@@ -2,6 +2,8 @@ import System.Random
 import Control.Monad.State
 import Data.List
 import Control.Monad.IO.Class (MonadIO(liftIO))
+import Data.List (sortBy, subsequences)
+import Data.Foldable (Foldable(maximum), maximumBy)
 
 data Suit = Spades | Hearts | Diamonds | Clubs
     deriving (Show, Eq, Ord)
@@ -20,10 +22,9 @@ instance Eq Card where
 instance Show Card where
     show (Card suit value) = show value ++ " of " ++ show suit
 
-newtype Deck = Deck [Card] deriving (Show)
+newtype Deck = Deck [Card] deriving (Show)    
 
-data HandRank = RoyalFlush | StraightFlush | FourOfAKind | FullHouse | Flush | Straight | ThreeOfAKind | TwoPair | Pair | HighCard
-    deriving (Show, Eq, Ord)
+data HandRank = HighCard | Pair | TwoPair | ThreeOfAKind | Straight | Flush | FullHouse | FourOfAKind | StraightFlush | RoyalFlush deriving (Show, Eq, Ord)
 
 data Player = Player {name :: String, hand :: [Card], chips :: Int, dealer :: Bool} deriving Show
 
@@ -39,33 +40,10 @@ main = do
     dealerIndex <- randomRIO (1, 6)
     print dealerIndex
     let (result, dealerState) = runState (assignDealer dealerIndex) initialState
-    let (result, dealtState) = runState dealCards dealerState
-    --print result
-    let (Deck cards) = deck result
-    let rflush = [Card Spades Ten, Card Spades Jack, Card Spades Queen, Card Spades King, Card Spades Ace]
-    let sflush = [Card Spades Two, Card Spades Three, Card Spades Four, Card Spades Five, Card Spades Six]
-    let fourofakind = [Card Spades Two, Card Hearts Two, Card Diamonds Two, Card Clubs Two, Card Spades Ace]
-    let fullHouse = [Card Spades Two, Card Hearts Two, Card Diamonds Two, Card Clubs Ace, Card Spades Ace]
-    let flush = [Card Spades Two, Card Spades Three, Card Spades Four, Card Spades Five, Card Spades Seven]
-    let straight = [Card Spades Two, Card Hearts Three, Card Diamonds Four, Card Clubs Five, Card Spades Six]
-    let threeOfAKind = [Card Spades Two, Card Hearts Two, Card Diamonds Two, Card Clubs Three, Card Spades Four]
-    let twoPair = [Card Spades Two, Card Hearts Two, Card Diamonds Three, Card Clubs Three, Card Spades Four]
-    let pair = [Card Spades Two, Card Hearts Two, Card Diamonds Three, Card Clubs Four, Card Spades Five]
-    let highCard = [Card Spades Two, Card Hearts Three, Card Diamonds Four, Card Clubs Five, Card Spades Seven]
-    print (evaluateHand rflush)
-    print (evaluateHand sflush)
-    print (evaluateHand fourofakind)
-    print (evaluateHand fullHouse)
-    print (evaluateHand flush)
-    print (evaluateHand straight)
-    print (evaluateHand threeOfAKind)
-    print (evaluateHand twoPair)
-    print (evaluateHand pair)
-    print (evaluateHand highCard)
-    --print (hand ((activePlayers result) !! (dealerIndex - 1)))
-    --print (evaluateHand (hand ((activePlayers result) !! (dealerIndex - 1))))
-     
-    
+    let (result, dealtState) = runState  dealCards dealerState
+
+    --let (result, _) = runState determineWinner dealtState
+    print result
 
 createInitialState :: [Player] -> GameState
 createInitialState players = GameState players (shuffleDeck 1) 0 [] 0 1 2
@@ -91,7 +69,6 @@ assignDealer index = do
     put gs {dealerIndex = index, activePlayers = players}
     get
 
-
 dealCards :: State GameState GameState
 dealCards = do
     gs <- get
@@ -110,12 +87,12 @@ dealCards = do
 
 evaluateHand :: [Card] -> HandRank
 evaluateHand hand = let
-        isRoyalFlush = allSameSuit && allConsecutive && value (minimum hand) == Ten
-        isStraightFlush = allSameSuit && allConsecutive
+        isRoyalFlush = allSameSuit && allConsecutive && value (minimum hand) == Ten && length hand == 5
+        isStraightFlush = allSameSuit && allConsecutive && length hand == 5
         isFourOfAKind = nOfAKind 4
         isFullHouse = nOfAKind 3 && nOfAKind 2
-        isFlush = allSameSuit
-        isStraight = allConsecutive
+        isFlush = allSameSuit && length hand == 5
+        isStraight = allConsecutive && length hand == 5
         isThreeOfAKind = nOfAKind 3
         isTwoPair = getNOfAKind 2 == 2
         isPair = getNOfAKind 2 == 1
@@ -137,4 +114,43 @@ evaluateHand hand = let
             in all (\(c1, c2) -> succ (value c1) == value c2) (zip sortedHand (tail sortedHand))
         getNOfAKind n = length (filter (\ls -> length ls == n) (group (sort hand)))
         nOfAKind n = getNOfAKind n > 0
-        
+
+--
+--determineWinner :: State GameState [Player]
+--determineWinner = do
+--   gs <- get
+--    let 
+--        filteredPlayers = filter (not.dealer) (activePlayers gs)
+--        dealerHand = hand (activePlayers gs !! dealerIndex gs)
+--        playerHands = filter (\(_, h) -> length h == 5) (map (\p -> (p, subsequences (hand p ++ dealerHand))) filteredPlayers)
+--        bestPlayerHands = concat (map allMaximumHands (groupBy (\(p1, _) (p2, _) -> p1 == p2)))
+
+
+--case maximumHand of
+--        HighCard -> return (determineHighCardWinner orderPlayerHands)
+
+  --  put gs
+    --return topPlayers
+
+sortCard :: [Card] -> [Card] -> Ordering
+sortCard [] [] = EQ
+sortCard (x:xs) (y:ys)
+    | x > y = GT
+    | y > x = LT
+    | x == y = sortCard xs ys
+
+findBestHand :: [[Card]] -> [Card]
+findBestHand cs = let
+        compareHands [] [] = EQ
+        getPairs xs = filter (\hs -> length hs == 2) (groupBy (\h1 h2 -> value h1 == value h2) xs)
+            -- handle different tie scenarios
+        resolveHighCardTie = last (sortBy (\h1 h2 -> (sortCard h1 h2)) sortedMaxHands)
+    in
+        if length allMaxHands == 1 then 
+            last sortedMaxHands
+        else case maximumHand of
+            HighCard -> resolveHighCardTie
+        where
+            maximumHand = evaluateHand (maximumBy (\h1 h2 -> compare (evaluateHand h1) (evaluateHand h2)) cs)
+            allMaxHands = filter (\h -> evaluateHand h == maximumHand) cs
+            sortedMaxHands = map (\h -> sortBy (\c1 c2 -> compare (value c1) (value c2)) h) allMaxHands
