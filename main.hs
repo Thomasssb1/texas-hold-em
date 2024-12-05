@@ -2,7 +2,7 @@ import System.Random
 import Control.Monad.State
 import Data.List
 import Control.Monad.IO.Class (MonadIO(liftIO))
-import Data.List (sortBy, subsequences)
+import Data.List (sortBy, subsequences, nubBy)
 import Data.Foldable (Foldable(maximum), maximumBy)
 
 data Suit = Spades | Hearts | Diamonds | Clubs
@@ -132,25 +132,38 @@ evaluateHand hand = let
   --  put gs
     --return topPlayers
 
-sortCard :: [Card] -> [Card] -> Ordering
-sortCard [] [] = EQ
-sortCard (x:xs) (y:ys)
-    | x > y = GT
-    | y > x = LT
-    | x == y = sortCard xs ys
-
-findBestHand :: [[Card]] -> [Card]
+findBestHand :: [[Card]] -> [[Card]]
 findBestHand cs = let
-        compareHands [] [] = EQ
-        getPairs xs = filter (\hs -> length hs == 2) (groupBy (\h1 h2 -> value h1 == value h2) xs)
-            -- handle different tie scenarios
-        resolveHighCardTie = last (sortBy (\h1 h2 -> (sortCard h1 h2)) sortedMaxHands)
+        -- handle different tie scenarios
+        resolveHighCardTie = getBestHand highestCard sortedMaxHands
+        resolvePairTie = getBestHand highestCard (getBestHand (highestN 2) sortedMaxHands)
+        resolveThreeOfAKindTie = getBestHand highestCard (getBestHand (highestN 3) sortedMaxHands)
+        resolveFullHouseTie = getBestHand (highestN 2) (getBestHand (highestN 3) sortedMaxHands)
+        resolveFourOfAKindTie = getBestHand highestCard (getBestHand (highestN 4) sortedMaxHands)
     in
         if length allMaxHands == 1 then 
-            last sortedMaxHands
+            sortedMaxHands
         else case maximumHand of
             HighCard -> resolveHighCardTie
+            Pair -> resolvePairTie
+            TwoPair -> resolvePairTie
+            ThreeOfAKind -> resolveThreeOfAKindTie
+            Straight -> resolveHighCardTie -- check the top card, but if it is the same then they are all the same
+            Flush -> resolveHighCardTie
+            FullHouse -> resolveFullHouseTie
+            FourOfAKind -> resolveFourOfAKindTie
+            StraightFlush -> resolveHighCardTie
+            RoyalFlush -> sortedMaxHands
         where
             maximumHand = evaluateHand (maximumBy (\h1 h2 -> compare (evaluateHand h1) (evaluateHand h2)) cs)
             allMaxHands = filter (\h -> evaluateHand h == maximumHand) cs
             sortedMaxHands = map (\h -> sortBy (\c1 c2 -> compare (value c1) (value c2)) h) allMaxHands
+            getBestHand f xs = last (sortBy (\hs1 hs2 -> f (head hs1) (head hs2)) (groupBy (\h1 h2  -> (f h1 h2) == EQ) xs))
+            highestN n xs ys = highestCard (getHighestN xs) (getHighestN ys)
+                where getHighestN h = sort (map head (filter (\hs -> length hs == n) (groupBy (\h1 h2 -> value h1 == value h2) h)))
+            -- orders
+            highestCard [] [] = EQ
+            highestCard (x:xs) (y:ys)
+                | x > y = GT
+                | y > x = LT
+                | x == y = highestCard xs ys
