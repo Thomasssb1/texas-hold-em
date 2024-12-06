@@ -1,8 +1,7 @@
 import System.Random
 import Control.Monad.State
 import Data.List
-import Control.Monad.IO.Class (MonadIO(liftIO))
-import Data.List (sortBy, subsequences, nubBy)
+import Data.List (sortBy, subsequences)
 import Data.Foldable (Foldable(maximum), maximumBy)
 
 data Suit = Spades | Hearts | Diamonds | Clubs
@@ -115,22 +114,23 @@ evaluateHand hand = let
         getNOfAKind n = length (filter (\ls -> length ls == n) (group (sort hand)))
         nOfAKind n = getNOfAKind n > 0
 
---
---determineWinner :: State GameState [Player]
---determineWinner = do
---   gs <- get
---    let 
---        filteredPlayers = filter (not.dealer) (activePlayers gs)
---        dealerHand = hand (activePlayers gs !! dealerIndex gs)
---        playerHands = filter (\(_, h) -> length h == 5) (map (\p -> (p, subsequences (hand p ++ dealerHand))) filteredPlayers)
---        bestPlayerHands = concat (map allMaximumHands (groupBy (\(p1, _) (p2, _) -> p1 == p2)))
 
+determineWinner :: State GameState [Player]
+determineWinner = do
+   gs <- get
+   let
+    filteredPlayers = filter (not.dealer) (activePlayers gs)
+    dealerHand = hand (activePlayers gs !! dealerIndex gs)
+    playerHands = map (\p -> (p, filter (\h -> length h == 5) (subsequences (hand p ++ dealerHand)))) filteredPlayers
+    -- returns the best hand for each player
+    bestPlayerHands = map (\(p, hs) -> (p, head (findBestHand hs))) playerHands
+    winningHands = findBestHand (map snd bestPlayerHands)
+    in
+        return (map fst (filter (\(_, h) -> inList h winningHands) bestPlayerHands))
+        where
+            inList _ [] = False
+            inList toFind (x:xs) = if x == toFind then True else inList toFind xs
 
---case maximumHand of
---        HighCard -> return (determineHighCardWinner orderPlayerHands)
-
-  --  put gs
-    --return topPlayers
 
 findBestHand :: [[Card]] -> [[Card]]
 findBestHand cs = let
