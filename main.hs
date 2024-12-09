@@ -51,23 +51,21 @@ main = do
     -- change runstate to execstate when you don't need the result
     initialPlayerSeed <- randomIO
     let initialState = createInitialState (createPlayers 6 initialPlayerSeed)
-    dealerIndex <- randomRIO (1, 6)
+    dealerIndex <- randomRIO (0, 5)
     print dealerIndex
     let (result, dealerState) = runState (assignDealer dealerIndex) initialState
 
     let dealer = activePlayers dealerState !! dealerIndex
     let (deck, shuffledDeckState) = runState (shuffleDeck dealer) dealerState
 
-    --let (result, communityState) = runState (dealCommunityCards 3) dealerState
     let (result, preflopState) = runState bettingRound shuffledDeckState
 
-    --print (currentRound result)
-    print (activePlayers result)
+    print(currentRound result)
     print (pot result)
 
 createInitialState :: [Player] -> GameState
 createInitialState players = let
-        intitialRoundState = RoundState 0 (map (\p -> (p,0)) players) 0 Preflop
+        intitialRoundState = RoundState 0 (map (\p -> (p,0)) players) 1 Preflop
         in
         GameState players (Deck []) 0 [] 0 1 2 [] intitialRoundState
 
@@ -90,7 +88,7 @@ createPlayers count initialSeed = let
 assignDealer :: Int -> State GameState GameState
 assignDealer index = do
     gs <- get
-    let players = map (\(i, p) -> p {dealer = (i == index)}) (zip [1..] (activePlayers gs))
+    let players = map (\(i, p) -> p {dealer = (i == index)}) (zip [0..] (activePlayers gs))
     let roundPlayers = map (\p -> (p, 0)) players
     let updatedRound = (currentRound gs) { previousPlayerBets = roundPlayers }
     put gs {dealerIndex = index, activePlayers = players, currentRound = updatedRound}
@@ -245,9 +243,9 @@ checkIfFoldValid :: Player -> (Bool, State GameState ())
 checkIfFoldValid plr = (True, fold plr)
 
 checkIfRaiseValid :: RoundState -> Player -> (Bool, State GameState ())
-checkIfRaiseValid rs plr = (chips plr >= minimumRaise rs, raise determineRandomRaiseAmount plr)
+checkIfRaiseValid rs plr = (chips plr >= minimumRaise rs, raise raiseAmount plr)
     where
-        determineRandomRaiseAmount = 100
+        (raiseAmount, newGen) = randomR (minimumRaise rs, chips plr) (randomGen plr)
 
 needToIterateAgain :: RoundState -> [Player]
 needToIterateAgain rs = map fst (filter (\(p, b) -> b /= highestBet rs) (previousPlayerBets rs))
@@ -286,6 +284,7 @@ bettingRound = do
             let bettingRoundState = execState (repeatUntilBetsEqual (activePlayers dealtCardState)) dealtCardState
             put bettingRoundState
 
+            put bettingRoundState {currentRound = (currentRound bettingRoundState) {roundType = Flop}}
             get
         Flop -> dealCommunityCards 3
         Turn -> dealCommunityCards 1
@@ -293,7 +292,6 @@ bettingRound = do
     where
         repeatUntilBetsEqual :: [Player] -> State GameState ()
         repeatUntilBetsEqual [] = do return ()
-        repeatUntilBetsEqual [x] = do return ()
         repeatUntilBetsEqual ps = do
             gs <- get
             let newState = execState (iterateEachPlayer ps) gs
