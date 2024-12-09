@@ -44,7 +44,7 @@ data RoundType = Preflop | Flop | Turn | River deriving (Show, Enum)
 
 data RoundState = RoundState {highestBet :: Int, previousPlayerBets :: [(Player, Int)], minimumRaise :: Int, roundType :: RoundType} deriving Show
 
-data GameState = GameState {activePlayers :: [Player], deck :: Deck, pot :: Int, currentBets :: [(Player, Int)], dealerIndex :: Int, smallBlindIndex :: Int, bigBlindIndex :: Int, currentRound :: RoundState} deriving Show
+data GameState = GameState {activePlayers :: [Player], deck :: Deck, pot :: Int, currentBets :: [(Player, Int)], dealerIndex :: Int, smallBlindIndex :: Int, bigBlindIndex :: Int, communityCards :: [Card], currentRound :: RoundState} deriving Show
 
 main :: IO ()
 main = do
@@ -54,7 +54,12 @@ main = do
     dealerIndex <- randomRIO (1, 6)
     print dealerIndex
     let (result, dealerState) = runState (assignDealer dealerIndex) initialState
-    let (result, preflopState) = runState bettingRound dealerState
+
+    let dealer = activePlayers dealerState !! dealerIndex
+    let (deck, shuffledDeckState) = runState (shuffleDeck dealer) dealerState
+
+    --let (result, communityState) = runState (dealCommunityCards 3) dealerState
+    let (result, preflopState) = runState bettingRound shuffledDeckState
 
     --print (currentRound result)
     print (activePlayers result)
@@ -64,16 +69,18 @@ createInitialState :: [Player] -> GameState
 createInitialState players = let
         intitialRoundState = RoundState 0 (map (\p -> (p,0)) players) 0 Preflop
         in
-        GameState players (shuffleDeck 1) 0 [] 0 1 2 intitialRoundState
+        GameState players (Deck []) 0 [] 0 1 2 [] intitialRoundState
 
 -- Shuffles the a deck of cards
--- Takes an integer seed for the random number generator
-shuffleDeck :: Int -> Deck
-shuffleDeck seed = let
-    cmp (_, n1) (_, n2) = compare n1 n2 
-    (Deck cards) = Deck [Card suit value | suit <- [Spades, Hearts, Diamonds, Clubs], value <- [Ace, Two, Three, Four, Five, Six, Seven, Eight, Nine, Ten, Jack, Queen, King]]
-    in
-    Deck [ card | (card, _) <- sortBy cmp (zip cards (randoms (mkStdGen seed) :: [Int]))]
+-- Takes the dealer and uses their StdGen in order to shuffle the deck
+shuffleDeck :: Player -> State GameState Deck
+shuffleDeck dealer = do
+    gs <- get
+    let cmp (_, n1) (_, n2) = compare n1 n2
+    let (Deck cards) = Deck [Card suit value | suit <- [Spades, Hearts, Diamonds, Clubs], value <- [Ace, Two, Three, Four, Five, Six, Seven, Eight, Nine, Ten, Jack, Queen, King]]
+    let updatedDeck = Deck [ card | (card, _) <- sortBy cmp (zip cards (randoms (randomGen dealer) :: [Int]))]
+    put gs {deck = updatedDeck}
+    return updatedDeck
 
 createPlayers :: Int -> Int -> [Player]
 createPlayers count initialSeed = let 
@@ -84,7 +91,7 @@ assignDealer :: Int -> State GameState GameState
 assignDealer index = do
     gs <- get
     let players = map (\(i, p) -> p {dealer = (i == index)}) (zip [1..] (activePlayers gs))
-    let roundPlayers = map (\p -> (p, 0)) (filter (not.dealer) players)
+    let roundPlayers = map (\p -> (p, 0)) players
     let updatedRound = (currentRound gs) { previousPlayerBets = roundPlayers }
     put gs {dealerIndex = index, activePlayers = players, currentRound = updatedRound}
     get
@@ -92,8 +99,8 @@ assignDealer index = do
 dealHoleCards :: State GameState GameState
 dealHoleCards = do
     gs <- get
-    -- deal two cards to each player and 5 to the dealer
-    let (updatedPlayers, updatedDeck) = dealCardsToPlayers (filter (not.dealer) (activePlayers gs)) (deck gs)
+    -- deal two cards to each player
+    let (updatedPlayers, updatedDeck) = dealCardsToPlayers (activePlayers gs) (deck gs)
     put gs {activePlayers = updatedPlayers, deck = updatedDeck}
     get
     where
@@ -108,8 +115,8 @@ dealCommunityCards :: Int -> State GameState GameState
 dealCommunityCards n = do
     gs <- get
     let cards (Deck deck) = deck
-    let updatedPlayers = map (\p -> if dealer p then p {hand = hand p ++ take n (cards (deck gs))} else p) (activePlayers gs)
-    put gs {activePlayers = updatedPlayers, deck = Deck (drop n (cards (deck gs)))}
+   --let updatedPlayers = map (\p -> p {hand = hand p ++ take n (cards (deck gs))}) (activePlayers gs)
+    put gs {communityCards = communityCards gs ++ take n (cards (deck gs)), deck = Deck (drop n (cards (deck gs)))}
     get
 
 evaluateHand :: [Card] -> HandRank
@@ -146,9 +153,7 @@ determineWinner :: State GameState [Player]
 determineWinner = do
    gs <- get
    let
-    filteredPlayers = filter (not.dealer) (activePlayers gs)
-    dealerHand = hand (activePlayers gs !! dealerIndex gs)
-    playerHands = map (\p -> (p, filter (\h -> length h == 5) (subsequences (hand p ++ dealerHand)))) filteredPlayers
+    playerHands = map (\p -> (p, filter (\h -> length h == 5) (subsequences (hand p ++ communityCards gs)))) (activePlayers gs)
     -- returns the best hand for each player
     bestPlayerHands = map (\(p, hs) -> (p, head (findBestHand hs))) playerHands
     winningHands = findBestHand (map snd bestPlayerHands)
@@ -278,21 +283,20 @@ bettingRound = do
             let dealtCardState = execState dealHoleCards gs
             put dealtCardState
             
-            let bettingRoundState = execState (repeatUntilBetsEqual (filter (not.dealer) (activePlayers gs))) dealtCardState
-            --let bettingRoundState = execState (iterateEachPlayer (filter (not.dealer) (activePlayers dealtCardState))) dealtCardState
+            let bettingRoundState = execState (repeatUntilBetsEqual (activePlayers dealtCardState)) dealtCardState
             put bettingRoundState
+
             get
         Flop -> dealCommunityCards 3
         Turn -> dealCommunityCards 1
         River -> dealCommunityCards 1
     where
+        repeatUntilBetsEqual :: [Player] -> State GameState ()
+        repeatUntilBetsEqual [] = do return ()
+        repeatUntilBetsEqual [x] = do return ()
         repeatUntilBetsEqual ps = do
             gs <- get
             let newState = execState (iterateEachPlayer ps) gs
             put newState
             -- get all of the players whose bets do not match the highest bet
-            let needToIteratePlayers = needToIterateAgain (currentRound newState)
-            if length needToIteratePlayers > 0 then do
-                repeatUntilBetsEqual needToIteratePlayers
-            else do
-                return ()
+            repeatUntilBetsEqual (needToIterateAgain (currentRound newState))
