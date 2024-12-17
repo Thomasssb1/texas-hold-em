@@ -3,6 +3,7 @@ import Control.Monad.State
 import Data.List
 import Data.Foldable (Foldable(maximum), maximumBy)
 import System.Random (StdGen, mkStdGen)
+import Data.Char
 import Prelude
 import Control.Monad.IO.Class (MonadIO(liftIO))
 
@@ -35,7 +36,7 @@ instance Eq Player where
     (==) (Player name1 _ _ _ _ _) (Player name2 _ _ _ _ _) = name1 == name2
 
 instance Show Player where
-    show (Player name hand chips dealer _ _) = "{name: "++name++", hand: "++showHand hand++", chips: " ++show chips++", dealer: "++show dealer++"}"
+    show (Player name hand chips dealer strategy _) = "{name: "++name++", hand: "++showHand hand++", chips: " ++show chips++", dealer: "++show dealer++", strat: "++show strategy++"}"
 
 showHand :: [Card] -> String
 showHand [] = ""
@@ -49,14 +50,20 @@ data GameState = GameState {activePlayers :: [Player], deck :: Deck, pot :: Int,
 main :: IO ()
 main = do
     initialPlayerSeed <- randomIO
-    let initialState = createInitialGameState (createPlayers 6 initialPlayerSeed)
+    putStr ("How many players would you like to create? ")
+    playerCountInp <- getLine
+    putStrLn ("Creating " ++ playerCountInp ++ " players:")
+    let plrCount = read playerCountInp :: Int
+    players <- createPlayers plrCount initialPlayerSeed
+    putStrLn (show players)
+    let initialState = createInitialGameState players
 
     dealerIndex <- randomRIO (0, 5)
     print dealerIndex
     (result, dealerState) <- runStateT (assignDealer dealerIndex) initialState
 
-    --let dealer = activePlayers dealerState !! dealerIndex
-    --(deck, shuffledDeckState) <- runStateT (shuffleDeck dealer) dealerState
+    let dealer = activePlayers dealerState !! dealerIndex
+    (deck, shuffledDeckState) <- runStateT (shuffleDeck dealer) dealerState
 
     (result, finalState) <- runStateT (gameLoop 0) dealerState
 
@@ -86,12 +93,28 @@ shuffleDeck dealer = do
     let (Deck cards) = Deck [Card suit value | suit <- [Spades, Hearts, Diamonds, Clubs], value <- [Ace, Two, Three, Four, Five, Six, Seven, Eight, Nine, Ten, Jack, Queen, King]]
     let updatedDeck = Deck [ card | (card, _) <- sortBy cmp (zip cards (randoms (randomGen dealer) :: [Int]))]
     put gs {deck = updatedDeck}
-    return updatedDeck
+    return updatedDeck    
 
-createPlayers :: Int -> Int -> [Player]
-createPlayers count initialSeed = let 
-    newPlayer i = Player ("Player " ++ show i) [] 100 False Smart (mkStdGen (initialSeed + i))
-    in [newPlayer i | i <- [1..count]]
+createPlayers :: Int -> Int -> IO [Player]
+createPlayers count initialSeed = do
+    putStrLn "Player options include: Random, Agressive, Passive, Smart"
+    newPlayers 0
+    where
+        newPlayers :: Int -> IO [Player]
+        newPlayers n = if n == count then return [] else do
+            putStrLn ("What type of player would you like to create? ("++show (n+1)++")")
+            inpStr <- getLine
+            let plr = Player ("Player " ++ show (n+1)) [] 100 False (getType inpStr) (mkStdGen (initialSeed + n))
+            rest <- newPlayers (n+1)
+            return (plr : rest)
+            where
+                getType :: String -> PlayerStrategy
+                getType inp = case map toLower inp of
+                    "random" -> Random
+                    "aggressive" -> Aggressive
+                    "passive" -> Passive
+                    "smart" -> Smart
+                    _ -> Random
 
 assignDealer :: Int -> StateT GameState IO GameState
 assignDealer index = do
