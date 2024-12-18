@@ -28,7 +28,7 @@ newtype Deck = Deck [Card] deriving (Show)
 
 data HandRank = HighCard | Pair | TwoPair | ThreeOfAKind | Straight | Flush | FullHouse | FourOfAKind | StraightFlush | RoyalFlush deriving (Show, Eq, Ord)
 
-data PlayerStrategy = Random | Passive | Aggressive | Smart deriving Show
+data PlayerStrategy = Random | Passive | Aggressive | Smart | Human deriving Show
 
 data Player = Player {name :: String, hand :: [Card], chips :: Int, dealer :: Bool, strategy :: PlayerStrategy, randomGen :: StdGen}
 
@@ -97,15 +97,15 @@ shuffleDeck dealer = do
 
 createPlayers :: Int -> Int -> IO [Player]
 createPlayers count initialSeed = do
-    putStrLn "Player options include: Random, Agressive, Passive, Smart"
-    newPlayers 0
+    putStrLn "Player options include: Random, Agressive, Passive, Smart, Human"
+    newPlayers 1
     where
         newPlayers :: Int -> IO [Player]
-        newPlayers n = if n == count then return [] else do
-            putStrLn ("What type of player would you like to create? ("++show (n+1)++")")
+        newPlayers n = if n - 1 == count then return [] else do
+            putStrLn ("What type of player would you like to create? ("++show n++")")
             inpStr <- getLine
-            let plr = Player ("Player " ++ show (n+1)) [] 100 False (getType inpStr) (mkStdGen (initialSeed + n))
-            rest <- newPlayers (n+1)
+            let plr = Player ("Player " ++ show n) [] 100 False (getType inpStr) (mkStdGen (initialSeed + n))
+            rest <- newPlayers (n + 1)
             return (plr : rest)
             where
                 getType :: String -> PlayerStrategy
@@ -114,6 +114,7 @@ createPlayers count initialSeed = do
                     "aggressive" -> Aggressive
                     "passive" -> Passive
                     "smart" -> Smart
+                    "human" -> Human
                     _ -> Random
 
 assignDealer :: Int -> StateT GameState IO GameState
@@ -324,6 +325,36 @@ smartPlayerStrategy plr = do
     where
         clamp lowerX upperX x = max lowerX (min upperX x) :: Int
 
+humanPlayerStrategy :: Player -> StateT GameState IO [StateT GameState IO ()]
+humanPlayerStrategy plr = do
+    lift $ putStrLn ("Human play now")
+    gs <- get
+    action <- checkIfValid
+    if fst action then
+        return [snd action]
+    else do
+        lift $ putStrLn ("Invalid action, try another one.")
+        humanPlayerStrategy plr
+    where 
+        checkIfValid :: StateT GameState IO (Bool, StateT GameState IO ())
+        checkIfValid = do
+            gs <- get
+            inpStr <- lift $ getLine
+            case map toLower inpStr of
+                "call" -> return (checkIfCallValid gs plr)
+                "raise" -> do
+                    lift $ putStrLn ("Player has "++(show(chips plr))++" and the minimum raise is "++(show(minimumRaise gs))++".")
+                    inpStr <- lift $ getLine
+                    let amount = (read inpStr :: Int)
+                    return (checkIfRaiseValid gs (Just amount) plr)
+                "fold" -> return (checkIfFoldValid plr)
+                _ -> do
+                    lift $ putStrLn ("Unknown action - only call, raise or fold are accepted commands.")
+                    checkIfValid
+                    
+                    
+
+
 chooseActionBasedOnStrategy :: Player -> StateT GameState IO GameState
 chooseActionBasedOnStrategy plr = do
     gs <- get
@@ -345,8 +376,13 @@ chooseActionBasedOnStrategy plr = do
             newState <- testAllActions actions gs
             put newState
             get
+        Human -> do
+            action <- lift $ evalStateT (humanPlayerStrategy plr) gs
+            newState <- lift $ execStateT (head action) gs
+            put newState
+            get
     where
-        shuffledActions gs weighting = [action | (action, _) <- sortBy (\(_, n1) (_, n2) -> compare n1 n2) (zip (applyWeightingToActions gs weighting [])  (randoms (randomGen plr) :: [Int]))]
+        shuffledActions gs weighting= [action | (action, _) <- sortBy (\(_, n1) (_, n2) -> compare n1 n2) (zip (applyWeightingToActions gs weighting [])  (randoms (randomGen plr) :: [Int]))]
 
         applyWeightingToActions _ (0, 0, 0) as = as
         applyWeightingToActions gs (cw, fw, rw) as
@@ -373,6 +409,7 @@ bettingRound :: StateT GameState IO GameState
 bettingRound = do
     gs <- get
     liftIO $ putStrLn ("roundtype " ++ show (roundType gs))
+    lift $ putStrLn ("players: "++ show (map (\(p, _) -> name p) (currentBets gs)))
     if length (currentBets gs) > 1 then do
         case roundType gs of
             Preflop -> do
@@ -397,8 +434,6 @@ bettingRound = do
                 put newState
                 get
         else do
-            -- lift $ putStrLn "fix?"
-            -- lift $ putStrLn (show (currentBets gs))
             put gs {roundType = Showdown}
             newState <- lift $ execStateT (awardWinners (map fst (currentBets gs))) gs
             put newState
