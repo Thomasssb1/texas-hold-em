@@ -30,50 +30,44 @@ data HandRank = HighCard | Pair | TwoPair | ThreeOfAKind | Straight | Flush | Fu
 
 data PlayerStrategy = Random | Passive | Aggressive | Smart | Human deriving Show
 
-data Player = Player {name :: String, hand :: [Card], chips :: Int, dealer :: Bool, strategy :: PlayerStrategy, randomGen :: StdGen}
+data Player = Player {name :: String, hand :: [Card], chips :: Int, dealer :: Bool, strategy :: PlayerStrategy}
 
 instance Eq Player where
-    (==) (Player name1 _ _ _ _ _) (Player name2 _ _ _ _ _) = name1 == name2
+    (==) (Player name1 _ _ _ _ ) (Player name2 _ _ _ _ ) = name1 == name2
 
 instance Show Player where
-    show (Player name hand chips dealer strategy _) = "{name: "++name++", hand: "++showHand hand++", chips: " ++show chips++", dealer: "++show dealer++", strat: "++show strategy++"}"
-
-showHand :: [Card] -> String
-showHand [] = ""
-showHand [x] = show x
-showHand (x:xs) = show x ++ ", " ++ showHand xs
+    show (Player name hand chips dealer strategy) = "{name: "++name++", chips: " ++show chips++", dealer: "++show dealer++", strat: "++show strategy++"}"
 
 data RoundType = Preflop | Flop | Turn | River | Showdown deriving (Show, Enum, Eq)
 
-data GameState = GameState {activePlayers :: [Player], deck :: Deck, pot :: Int, currentBets :: [(Player, Int)], dealerIndex :: Int, smallBlindIndex :: Int, bigBlindIndex :: Int, communityCards :: [Card], highestBet :: Int, minimumRaise :: Int, roundType :: RoundType} deriving Show
+data GameState = GameState {activePlayers :: [Player], deck :: Deck, pot :: Int, currentBets :: [(Player, Int)], dealerIndex :: Int, smallBlindIndex :: Int, bigBlindIndex :: Int, communityCards :: [Card], highestBet :: Int, minimumRaise :: Int, roundType :: RoundType,  randomGen :: StdGen} deriving Show
 
 main :: IO ()
 main = do
-    initialPlayerSeed <- randomIO
+    initialSeed <- randomIO
     putStr ("How many players would you like to create? ")
     playerCountInp <- getLine
     putStrLn ("Creating " ++ playerCountInp ++ " players:")
     let plrCount = read playerCountInp :: Int
-    players <- createPlayers plrCount initialPlayerSeed
+    players <- createPlayers plrCount
     putStrLn (show players)
-    let initialState = createInitialGameState players
+    let initialState = createInitialGameState players initialSeed
 
     dealerIndex <- randomRIO (0, 5)
     print dealerIndex
     (result, dealerState) <- runStateT (assignDealer dealerIndex) initialState
 
-    let dealer = activePlayers dealerState !! dealerIndex
-    (deck, shuffledDeckState) <- runStateT (shuffleDeck dealer) dealerState
+    (deck, shuffledDeckState) <- runStateT shuffleDeck dealerState
 
     (result, finalState) <- runStateT (gameLoop 0) dealerState
 
     print (pot finalState)
     print (activePlayers finalState)
 
-createInitialGameState :: [Player] -> GameState
-createInitialGameState players = let
+createInitialGameState :: [Player] -> Int -> GameState
+createInitialGameState players initialSeed = let
         in
-        GameState players (Deck []) 0 (map (\p -> (p,0)) players) 0 1 2 [] 0 1 Preflop
+        GameState players (Deck []) 0 (map (\p -> (p,0)) players) 0 1 2 [] 0 1 Preflop (mkStdGen initialSeed)
 
 updateGameState :: StateT GameState IO ()
 updateGameState = do
@@ -85,18 +79,19 @@ updateGameState = do
 
 -- Shuffles the a deck of cards
 -- Takes the dealer and uses their StdGen in order to shuffle the deck
-shuffleDeck :: Player -> StateT GameState IO Deck
-shuffleDeck dealer = do
+shuffleDeck :: StateT GameState IO Deck
+shuffleDeck = do
     gs <- get
     liftIO $ putStrLn "hi"
     let cmp (_, n1) (_, n2) = compare n1 n2
     let (Deck cards) = Deck [Card suit value | suit <- [Spades, Hearts, Diamonds, Clubs], value <- [Ace, Two, Three, Four, Five, Six, Seven, Eight, Nine, Ten, Jack, Queen, King]]
-    let updatedDeck = Deck [ card | (card, _) <- sortBy cmp (zip cards (randoms (randomGen dealer) :: [Int]))]
-    put gs {deck = updatedDeck}
+    let (gen, newGen) = split (randomGen gs)
+    let updatedDeck = Deck [ card | (card, _) <- sortBy cmp (zip cards (randoms gen :: [Int]))]
+    put gs {deck = updatedDeck, randomGen = newGen}
     return updatedDeck    
 
-createPlayers :: Int -> Int -> IO [Player]
-createPlayers count initialSeed = do
+createPlayers :: Int -> IO [Player]
+createPlayers count = do
     putStrLn "Player options include: Random, Agressive, Passive, Smart, Human"
     newPlayers 1
     where
@@ -104,7 +99,7 @@ createPlayers count initialSeed = do
         newPlayers n = if n - 1 == count then return [] else do
             putStrLn ("What type of player would you like to create? ("++show n++")")
             inpStr <- getLine
-            let plr = Player ("Player " ++ show n) [] 100 False (getType inpStr) (mkStdGen (initialSeed + n))
+            let plr = Player ("Player " ++ show n) [] 100 False (getType inpStr)
             rest <- newPlayers (n + 1)
             return (plr : rest)
             where
@@ -133,12 +128,12 @@ dealHoleCards = do
     put gs {activePlayers = updatedPlayers, deck = updatedDeck, currentBets = updatedRoundPlayers}
     get
     where
-    dealCardsToPlayers :: [Player] -> Deck -> ([Player], Deck)
-    dealCardsToPlayers [] deck = ([], deck)
-    dealCardsToPlayers (p:ps) (Deck deck) = let
-        player = p {hand = hand p ++ (take 2 deck)}
-        (players, Deck updatedDeck) = dealCardsToPlayers ps (Deck (drop 2 deck))
-        in (player : players, Deck updatedDeck)
+        dealCardsToPlayers :: [Player] -> Deck -> ([Player], Deck)
+        dealCardsToPlayers [] deck = ([], deck)
+        dealCardsToPlayers (p:ps) (Deck deck) = let
+            player = p {hand = hand p ++ (take 2 deck)}
+            (players, Deck updatedDeck) = dealCardsToPlayers ps (Deck (drop 2 deck))
+            in (player : players, Deck updatedDeck)
 
 dealCommunityCards :: Int -> StateT GameState IO GameState
 dealCommunityCards n = do
@@ -276,7 +271,7 @@ checkIfRaiseValid :: GameState -> Maybe Int -> Player -> (Bool, StateT GameState
 checkIfRaiseValid gs (Just raiseAmount) plr = (raiseAmount <= chips plr && raiseAmount >= minimumRaise gs, raise raiseAmount plr)
 checkIfRaiseValid gs Nothing plr = (chips plr >= minimumRaise gs, raise raiseAmount plr)
     where
-        (raiseAmount, newGen) = randomR (minimumRaise gs, chips plr) (randomGen plr)
+        (raiseAmount, newGen) = randomR (minimumRaise gs, chips plr) (randomGen gs)
 
 needToIterateAgain :: GameState -> [Player]
 needToIterateAgain gs = map fst (filter (\(p, b) -> b /= highestBet gs) (currentBets gs))
@@ -351,24 +346,28 @@ humanPlayerStrategy plr = do
                 _ -> do
                     lift $ putStrLn ("Unknown action - only call, raise or fold are accepted commands.")
                     checkIfValid
-                    
-                    
+
 
 
 chooseActionBasedOnStrategy :: Player -> StateT GameState IO GameState
 chooseActionBasedOnStrategy plr = do
     gs <- get
+    let roundPlayers = map fst (currentBets gs)
+    lift $ putStrLn (show roundPlayers)
     case strategy plr of
         Random -> do
-            newState <- testAllActions (shuffledActions gs (1, 1, 1)) gs
+            (shuffledActions, shuffledState) <- lift $ runStateT (shuffleActions (1,1,1)) gs
+            newState <- testAllActions shuffledActions shuffledState
             put newState
             get
         Passive -> do
-            newState <- testAllActions (shuffledActions gs (1, 1, 0)) gs
+            (shuffledActions, shuffledState) <- lift $ runStateT (shuffleActions (1,1,0)) gs
+            newState <- testAllActions shuffledActions shuffledState
             put newState
             get
         Aggressive -> do
-            newState <- testAllActions (shuffledActions gs (3, 1, 3)) gs
+            (shuffledActions, shuffledState) <- lift $ runStateT (shuffleActions (3,1,3)) gs
+            newState <- testAllActions shuffledActions shuffledState
             put newState
             get
         Smart -> do
@@ -382,7 +381,18 @@ chooseActionBasedOnStrategy plr = do
             put newState
             get
     where
-        shuffledActions gs weighting= [action | (action, _) <- sortBy (\(_, n1) (_, n2) -> compare n1 n2) (zip (applyWeightingToActions gs weighting [])  (randoms (randomGen plr) :: [Int]))]
+        shuffleActions weighting = do
+            gs <- get
+            -- split one generator into two so that we can update the generator
+            let (gen, newGen) = split (randomGen gs)
+
+            lift $ putStrLn( show plr)
+
+            put gs {randomGen = newGen}
+
+            lift $ putStrLn ("----: "++show (currentBets gs))
+
+            return [action | (action, _) <- sortBy (\(_, n1) (_, n2) -> compare n1 n2) (zip (applyWeightingToActions gs weighting [])  (randoms gen :: [Int]))]
 
         applyWeightingToActions _ (0, 0, 0) as = as
         applyWeightingToActions gs (cw, fw, rw) as
@@ -402,8 +412,14 @@ iterateEachPlayer :: [Player] -> StateT GameState IO GameState
 iterateEachPlayer [] = do get
 iterateEachPlayer (p:ps) = do
     gs <- get
-    chooseActionBasedOnStrategy p
-    iterateEachPlayer ps
+    let roundPlayers = map fst (currentBets gs)
+    lift $ putStrLn (show roundPlayers)
+    if length (currentBets gs) == 1 then do
+        get
+    else do
+        newState <- lift $ execStateT (chooseActionBasedOnStrategy p) gs
+        put newState
+        iterateEachPlayer ps
 
 bettingRound :: StateT GameState IO GameState
 bettingRound = do
@@ -446,7 +462,7 @@ bettingRound = do
             put dealtCardState
                         
             let roundPlayers = map fst (currentBets dealtCardState)
-            -- lift $ putStrLn (show roundPlayers)
+            lift $ putStrLn (show roundPlayers)
             bettingRoundState <- lift $ execStateT (repeatUntilBetsEqual roundPlayers) dealtCardState
             put bettingRoundState
 
@@ -458,6 +474,8 @@ bettingRound = do
                 repeatUntilBetsEqual [p] = do return ()
                 repeatUntilBetsEqual ps = do
                     gs <- get
+                    let roundPlayers = map fst (currentBets gs)
+                    lift $ putStrLn (show roundPlayers)
                     newState <- lift $ execStateT (iterateEachPlayer ps) gs
                     put newState
                     -- get all of the players whose bets do not match the highest bet
@@ -488,8 +506,7 @@ gameLoop i = do
     gs <- get
     liftIO $ putStrLn ("round " ++ (show i))
     if length (activePlayers gs) == 1 then do get else do
-        let dealer = activePlayers gs !! (dealerIndex gs)
-        (deck, shuffledDeckState) <- lift $ runStateT (shuffleDeck dealer) gs
+        (deck, shuffledDeckState) <- lift $ runStateT shuffleDeck gs
         finalState <- lift $ execStateT bettingRound shuffledDeckState
         newState <- lift $ execStateT updateGameState finalState
         -- lift $ putStrLn (show newState)
