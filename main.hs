@@ -104,7 +104,7 @@ main = do
 createInitialGameState :: [Player] -> Int -> GameState
 createInitialGameState players initialSeed = let
         in
-        GameState players (Deck []) 0 (map (\p -> (p,0)) players) 0 1 2 [] 0 1 Preflop (mkStdGen initialSeed)
+        GameState players (Deck []) 0 (map (\p -> (p,0)) players) 0 1 2 [] 0 4 Preflop (mkStdGen initialSeed)
 
 {-|
     Function    : createPlayers
@@ -117,7 +117,7 @@ createInitialGameState players initialSeed = let
 -}
 createPlayers :: Int -> IO [Player]
 createPlayers count = do
-    putStrLn "Player options include: Random, Agressive, Passive, Smart, Human"
+    putStrLn "Player options include: Random, Aggressive, Passive, Smart, Human"
     newPlayers 1
     where
         newPlayers :: Int -> IO [Player]
@@ -175,13 +175,16 @@ applyBlinds = do
     gs <- get
     let smallBlindIndex = incrementIndex (dealerIndex gs) (map fst (currentBets gs))
     let smallBlindPlayer = fst (currentBets gs !! smallBlindIndex)
-    let bigBlindPlayer = fst (currentBets gs !! incrementIndex smallBlindIndex (map fst (currentBets gs)))
-    lift $ putStrLn ("applied blind: "++show smallBlindPlayer)
-    lift $ putStrLn ("applied blind: "++show bigBlindPlayer)
+    lift $ putStrLn ("Applied small blind to: "++show smallBlindPlayer)
     smallState <- lift $ execStateT (playerBet smallBlindPlayer (smallBlind gs)) gs
-    bigState <- lift $ execStateT (playerBet bigBlindPlayer (bigBlind gs)) smallState
+    
+    let bigBlindPlayer = fst (currentBets smallState !! incrementIndex smallBlindIndex (map fst (currentBets smallState)))
+    lift $ putStrLn ("Applied big blind to: "++show bigBlindPlayer)
+    -- if the player cant afford the full blind, do a partial blind
+    let blindAmount = min (bigBlind gs) (chips bigBlindPlayer)
+    bigState <- lift $ execStateT (playerBet bigBlindPlayer blindAmount) smallState
 
-    put bigState
+    put smallState
 
 {-|
     Function    : reorderPlayers
@@ -225,7 +228,7 @@ dealHoleCards = do
     gs <- get
     -- deal two cards to each player
     let (updatedPlayers, updatedDeck) = dealCardsToPlayers (activePlayers gs) (deck gs)
-    let updatedRoundPlayers = map (\(p,b) -> (head (filter (==p) updatedPlayers), b)) (currentBets gs)
+    let updatedRoundPlayers = map (\(p,b) -> (p {hand = hand (head (filter (==p) updatedPlayers))}, b)) (currentBets gs)
     put gs {activePlayers = updatedPlayers, deck = updatedDeck, currentBets = updatedRoundPlayers}
     get
     where
@@ -399,7 +402,7 @@ playerBet plr amount = do
     let updatedRoundBets = map (\(p, n) -> if p == plr then (updatedPlayer, n+amount) else (p, n)) (currentBets gs)
     -- calculate the highest bet as the amount argument is only an increment
     let newAmount = snd (head (filter (\(p, _) -> p == plr) updatedRoundBets))
-    put gs {highestBet = if newAmount > highestBet gs then newAmount else highestBet gs, pot = pot gs + amount, currentBets = updatedRoundBets}
+    put gs {highestBet = max newAmount (highestBet gs), pot = pot gs + amount, currentBets = updatedRoundBets}
 
 {-|
     Function    : fold
@@ -602,17 +605,26 @@ awardWinners winners = do
     gs <- get
     lift $ putStrLn ((show winners)++" has won with a pot of "++show(pot gs)++".")
     let playersLeft = map fst (currentBets gs)
-    let splitPotAmount = (pot gs `div` (length winners))
+
+    -- necessary so that money does not get lost when dividing odd by even
+    let baseShare = fromIntegral (pot gs) / fromIntegral (length winners)
+    let remainder = pot gs - (floor baseShare * length winners)
     
     -- remove player bets and also add winnings if they won
-    let addChipsToWinners = map (\p -> if checkIfPlayerInPlayerList p playersLeft then if checkIfPlayerInPlayerList p winners then p {chips = chips p + splitPotAmount - highestBet gs} else  p {chips = chips p - highestBet gs} else p) (activePlayers gs)
+    let addChipsToWinners = map (\p -> if checkIfPlayerInPlayerList p playersLeft then if checkIfPlayerInPlayerList p winners then p {chips = chips p + floor baseShare - findPlayerBet p (currentBets gs)} else  p {chips = chips p - findPlayerBet p (currentBets gs)} else p) (activePlayers gs)
+    -- right now just give the spare chips to the first person
+    let addRemainingChips = map (\p -> if p == head addChipsToWinners then p {chips = chips p + remainder} else p) addChipsToWinners
 
     -- update the state
-    put gs {activePlayers = addChipsToWinners, pot = 0}
+    put gs {activePlayers = addRemainingChips, pot = 0}
     get
     where
         checkIfPlayerInPlayerList _ [] = False
         checkIfPlayerInPlayerList p (w:ws) = if p == w then True else checkIfPlayerInPlayerList p ws
+        -- necessary as the highestBet will not always represent the amount they put in
+        -- e.g. someone is applied a blind then folds instantly
+        findPlayerBet _ [] = 0
+        findPlayerBet plr (p:ps) = if plr == fst p then snd p else findPlayerBet plr ps
 
 {-|
     Function    : bettingRound
@@ -672,7 +684,7 @@ updateGameState = do
     -- necessary so that the dealer does not skip when a player is removed while incrementing
     newDealerIndex <- lift $ evalStateT (findDealer (incrementIndex (dealerIndex gs) (activePlayers gs)) updatedPlayers) gs
 
-    put gs {activePlayers = updatedPlayers, deck = Deck[], pot = 0, currentBets = (map (\p -> (p,0)) updatedPlayers), dealerIndex = newDealerIndex, communityCards = [], highestBet = 0, minimumRaise = 1, roundType = Preflop}
+    put gs {activePlayers = updatedPlayers, deck = Deck[], pot = 0, currentBets = (map (\p -> (p,0)) updatedPlayers), dealerIndex = newDealerIndex, communityCards = [], highestBet = 0, minimumRaise = (bigBlind gs) + 1, roundType = Preflop}
     where
         findDealer :: Int -> [Player] -> StateT GameState IO Int
         findDealer i updatedPlayers = do
@@ -693,16 +705,23 @@ updateGameState = do
     left with all the chips.
 -}
 gameLoop :: Int -> StateT GameState IO GameState
-gameLoop 3 = do get
+gameLoop 100 = do get
 gameLoop i = do
     gs <- get
-    lift $ putStrLn ("Round: " ++ (show (i+1)))
     if length (activePlayers gs) == 1 then do get else do
+        lift $ putStrLn ("Round: " ++ (show (i+1)))
         (deck, shuffledDeckState) <- lift $ runStateT shuffleDeck gs
         finalState <- lift $ execStateT bettingRound shuffledDeckState
         newState <- lift $ execStateT updateGameState finalState
         put newState
         gameLoop (i+1)
+
+{-|
+    Function    : clamp
+    Description : clamps a value between a lower and upper bound
+-}
+clamp :: Int -> Int -> Int -> Int
+clamp lowerX upperX x = max lowerX (min upperX x) :: Int
 
 {-|
     Function    : smartPlayerStrategy
@@ -749,8 +768,6 @@ smartPlayerStrategy plr = do
             return [checkIfRaiseValid gs betAmount, checkIfCallValid gs, checkIfFoldValid]
         else do
             return [checkIfCallValid gs, checkIfFoldValid, checkIfRaiseValid gs betAmount]
-    where
-        clamp lowerX upperX x = max lowerX (min upperX x) :: Int
 
 {-|
     Function    : humanPlayerStrategy
