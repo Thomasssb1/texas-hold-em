@@ -91,7 +91,8 @@ main = do
 
     finalState <- execStateT (gameLoop 0) dealerState
 
-    print ("Winner(s): "++(show (activePlayers finalState)))
+    let playerWithHighestChipValue = maximumBy (\p1 p2 -> compare (chips p1) (chips p2)) (activePlayers finalState)
+    print ("Winner(s): "++(show playerWithHighestChipValue)++ " with "++(show (chips playerWithHighestChipValue))++" chips.")
 
 {-|
     Function    : createInitialGameState
@@ -175,6 +176,8 @@ applyBlinds = do
     let smallBlindIndex = incrementIndex (dealerIndex gs) (map fst (currentBets gs))
     let smallBlindPlayer = fst (currentBets gs !! smallBlindIndex)
     let bigBlindPlayer = fst (currentBets gs !! incrementIndex smallBlindIndex (map fst (currentBets gs)))
+    lift $ putStrLn ("applied blind: "++show smallBlindPlayer)
+    lift $ putStrLn ("applied blind: "++show bigBlindPlayer)
     smallState <- lift $ execStateT (playerBet smallBlindPlayer (smallBlind gs)) gs
     bigState <- lift $ execStateT (playerBet bigBlindPlayer (bigBlind gs)) smallState
 
@@ -690,7 +693,7 @@ updateGameState = do
     left with all the chips.
 -}
 gameLoop :: Int -> StateT GameState IO GameState
-gameLoop 100 = do get
+gameLoop 3 = do get
 gameLoop i = do
     gs <- get
     lift $ putStrLn ("Round: " ++ (show (i+1)))
